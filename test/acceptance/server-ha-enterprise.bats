@@ -5,8 +5,11 @@ load _helpers
 @test "server/ha enterprise: testing enterprise deployment: performance replica" {
   cd `chart_dir`
 
-  helm install --name="$(name_prefix)-us-east" \
-    --set='global.image=hashicorp/vault-enterprise:1.2.3_ent' \
+  helm install "$(name_prefix)-us-east" \
+    --set='server.image.repository=hashicorp/vault-enterprise' \
+    --set='server.image.tag=1.3.2_ent' \
+    --set='injector.agentImage.repository=hashicorp/vault-enterprise' \
+    --set='injector.agentImage.tag=1.3.2_ent' \
     --set='server.ha.enabled=true' \
     -f $(chart_dir)/test/acceptance/values-us-east.yaml .
 
@@ -32,11 +35,8 @@ load _helpers
   local root_primary=$(echo ${init?} | jq -r '.root_token')
   [ "${root_primary}" != "" ]
 
-  echo ${token_primary} > /tmp/init
-  echo ${root_primary} >> /tmp/init
-
   # Vault Unseal
-  local pods=($(kubectl get pods --selector="app.kubernetes.io/instance=$(name_prefix)-us-east" -o json | jq -r '.items[].metadata.name'))
+  local pods=($(kubectl get pods --selector="app.kubernetes.io/instance=$(name_prefix)-us-east,app.kubernetes.io/name=vault" -o json | jq -r '.items[].metadata.name'))
   for pod in "${pods[@]}"
   do
       kubectl exec -ti ${pod} -- vault operator unseal ${token_primary}
@@ -54,7 +54,7 @@ load _helpers
   [ "${init_status}" == "true" ]
 
   kubectl exec -ti $(name_prefix)-us-east-0 -- vault login ${root_primary}
-  kubectl exec -ti $(name_prefix)-us-east-0 -- vault write -f sys/replication/performance/primary/enable primary_cluster_addr=https://$(name_prefix)-us-east:8201
+  kubectl exec -ti $(name_prefix)-us-east-0 -- vault write -f sys/replication/performance/primary/enable -primary_cluster_addr=https://$(name_prefix):8201
 
   local secondary=$(kubectl exec -ti "$(name_prefix)-us-east-0" -- vault write sys/replication/performance/primary/secondary-token id=secondary -format=json)
   [ "${secondary}" != "" ]
@@ -65,15 +65,18 @@ load _helpers
 
   ##### Setup secondary cluster
 
-  helm install --name="$(name_prefix)-us-west" \
-    --set='global.image=hashicorp/vault-enterprise:1.2.3_ent' \
+  helm install "$(name_prefix)-us-west" \
+    --set='server.image.repository=hashicorp/vault-enterprise' \
+    --set='server.image.tag=1.3.2_ent' \
+    --set='injector.agentImage.repository=hashicorp/vault-enterprise' \
+    --set='injector.agentImage.tag=1.3.2_ent' \
     --set='server.ha.enabled=true' \
     -f $(chart_dir)/test/acceptance/values-us-west.yaml .
 
   # Breathing room
   sleep 5
   wait_for_not_ready "$(name_prefix)-us-west-0"
-  
+
   # Sealed, not initialized
   local sealed_status=$(kubectl exec "$(name_prefix)-us-west-0" -- vault status -format=json |
     jq -r '.sealed' )
@@ -93,7 +96,7 @@ load _helpers
   [ "${root_secondary}" != "" ]
 
   # Vault Unseal
-  local pods=($(kubectl get pods --selector="app.kubernetes.io/instance=$(name_prefix)-us-west" -o json | jq -r '.items[].metadata.name'))
+  local pods=($(kubectl get pods --selector="app.kubernetes.io/instance=$(name_prefix)-us-west,app.kubernetes.io/name=vault" -o json | jq -r '.items[].metadata.name'))
   for pod in "${pods[@]}"
   do
       kubectl exec -ti ${pod} -- vault operator unseal ${token_secondary}
@@ -113,7 +116,7 @@ load _helpers
   kubectl exec -ti "$(name_prefix)-us-west-0" -- vault login ${root_secondary}
   kubectl exec -ti "$(name_prefix)-us-west-0" -- vault write sys/replication/performance/secondary/enable token=${secondary_token}
 
-  local pods=($(kubectl get pods --selector="app.kubernetes.io/instance=$(name_prefix)-us-west" -o json | jq -r '.items[].metadata.name'))
+  local pods=($(kubectl get pods --selector="app.kubernetes.io/instance=$(name_prefix)-us-west,app.kubernetes.io/name=vault" -o json | jq -r '.items[].metadata.name'))
   for pod in "${pods[@]}"
   do
       if [[ ${pod?} != "$(name_prefix)-us-west-0" ]]
@@ -127,22 +130,24 @@ load _helpers
   for pod in "${pods[@]}"
   do
       wait_for_ready "${pod?}"
-  done  
+  done
 }
 
 # setup a consul env
 setup() {
-  helm install https://github.com/hashicorp/consul-helm/archive/v0.8.1.tar.gz \
-    --name consul \
+  kubectl delete namespace acceptance --ignore-not-found=true
+  kubectl create namespace acceptance
+  kubectl config set-context --current --namespace=acceptance
+
+  helm install consul https://github.com/hashicorp/consul-helm/archive/v0.17.0.tar.gz \
     --set 'ui.enabled=false' \
     --wait
 }
 
 #cleanup
 teardown() {
-  exit 0
-  helm delete --purge consul
-  helm delete --purge vault-us-east
-  helm delete --purge vault-us-west
+  helm delete consul
+  helm delete vault-us-east
+  helm delete vault-us-west
   kubectl delete pvc --all
 }
