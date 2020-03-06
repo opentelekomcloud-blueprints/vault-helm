@@ -6,7 +6,8 @@ load _helpers
   cd `chart_dir`
 
   helm install "$(name_prefix)" \
-    --set='server.ha.enabled=true' .
+    --set='server.ha.enabled=true' \
+    -f $(chart_dir)/test/acceptance/values-us-east.yaml .
   
   # Breathing room
   sleep 5
