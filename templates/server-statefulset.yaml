@@ -45,6 +45,52 @@ spec:
         fsGroup: {{ .Values.server.gid | default 1000 }}
       volumes:
         {{ template "vault.volumes" . }}
+        - name: tls-server-cert
+          emptyDir:
+            # We're using tmpfs here so that
+            # client certs are not written to disk
+            medium: "Memory"
+        - name: tls-ca-cert
+          secret:
+            secretName: {{ .Values.global.caCert }}
+        - name: tls-ca-key
+          secret:
+            secretName: {{ .Values.global.caKey }}
+      initContainers:
+      - name: vault-tls-init
+        image: "{{ .Values.global.consulImage }}"
+        env:
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        command:
+          - "/bin/sh"
+          - "-ec"
+          - |
+            cd /vault/tls/server
+            consul tls cert create -client \
+              -additional-ipaddress=${POD_IP} \
+              -additional-dnsname="vault.{{ .Release.Namespace }}.svc.cluster.local" \
+              -dc={{ .Values.global.datacenter }} \
+              -domain={{ .Values.global.domain }} \
+              -ca=/consul/tls/ca/cert/tls.crt \
+              -key=/consul/tls/ca/key/tls.key
+            mv {{ .Values.global.datacenter }}-client-{{ .Values.global.domain }}-0.pem tls.crt
+            mv {{ .Values.global.datacenter }}-client-{{ .Values.global.domain }}-0-key.pem tls.key
+        volumeMounts:
+          - name: tls-server-cert
+            mountPath: /vault/tls/server
+          - name: tls-ca-cert
+            mountPath: /consul/tls/ca/cert
+            readOnly: true
+          - name: tls-ca-key
+            mountPath: /consul/tls/ca/key
+            readOnly: true
       containers:
         - name: vault
           {{ template "vault.resources" . }}
@@ -68,6 +114,8 @@ spec:
               value: "{{ include "vault.scheme" . }}://127.0.0.1:8200"
             - name: VAULT_API_ADDR
               value: "{{ include "vault.scheme" . }}://$(POD_IP):8200"
+            - name: VAULT_CACERT
+              value: "/consul/tls/ca/cert/tls.crt"
             - name: SKIP_CHOWN
               value: "true"
             - name: SKIP_SETCAP
@@ -77,6 +125,12 @@ spec:
             {{- include "vault.extraSecretEnvironmentVars" .Values.server | nindent 12 }}
           volumeMounts:
           {{ template "vault.mounts" . }}
+            - name: tls-server-cert
+              mountPath: /vault/tls/server
+              readOnly: true
+            - name: tls-ca-cert
+              mountPath: /consul/tls/ca/cert
+              readOnly: true
           ports:
             - containerPort: 8200
               name: http
