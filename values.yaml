@@ -10,6 +10,8 @@ global:
   #   - name: image-pull-secret
   # TLS for end-to-end encrypted transport
   tlsDisable: true
+  # If enable tls, provide number of days the vault server certificate is valid for.
+  certValidDays: 730
 
 injector:
   # True if you want to enable vault agent injection.
